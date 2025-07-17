@@ -1,5 +1,4 @@
 Flask
 PyMuPDF
 gunicorn
-spacy==3.7.5
-requests
+spacy==3.7.4
