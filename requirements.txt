@@ -1,4 +1,3 @@
-Flask
+streamlit
 PyMuPDF
-gunicorn
-spacy==3.7.4
+spacy==3.6.1

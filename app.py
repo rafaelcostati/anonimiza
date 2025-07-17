@@ -1,157 +1,126 @@
-# --- 1. IMPORTAÇÕES ---
-from flask import Flask, request, send_file, Response
+import streamlit as st
 import fitz  # PyMuPDF
 import re
 import os
 import spacy
 import io
 
-# --- 2. CONFIGURAÇÃO INICIAL E CARREGAMENTO DO MODELO ---
-# Esta parte é executada uma vez quando o servidor da API é iniciado.
+# --- CONFIGURAÇÃO DA PÁGINA E TÍTULO ---
+st.set_page_config(page_title="Anonimizador de PDF", layout="wide")
+st.title("Ferramenta de Anonimização de PDF 📄➡️⬛")
+st.markdown("Faça o upload de um arquivo PDF para anonimizar dados sensíveis como CPF, CNPJ, e-mails, telefones e endereços.")
 
-# Inicializa a aplicação Flask
-app = Flask(__name__)
+# --- LÓGICA DE CACHE E CARREGAMENTO DO MODELO NLP ---
+# @st.cache_resource é a forma correta de carregar modelos pesados no Streamlit.
+# Ele garante que o modelo seja carregado apenas uma vez e mantido em memória.
+@st.cache_resource
+def carregar_modelo_nlp():
+    """Baixa e carrega o modelo spaCy, mantendo-o em cache."""
+    modelo = "pt_core_news_lg"
+    try:
+        print(f"Tentando carregar o modelo '{modelo}'...")
+        nlp = spacy.load(modelo)
+        print("Modelo carregado com sucesso!")
+    except OSError:
+        print(f"Modelo não encontrado. Baixando '{modelo}'...")
+        from spacy.cli import download
+        download(modelo)
+        nlp = spacy.load(modelo)
+        print("Modelo baixado e carregado com sucesso!")
+    return nlp
 
-# Tenta carregar o modelo de NLP. Se não estiver instalado, baixa automaticamente.
-# No Render, isso acontece durante a fase de "build" ou na primeira inicialização.
-try:
-    print("Carregando modelo de NLP 'pt_core_news_lg'...")
-    # Usamos o modelo grande e mais preciso, pois o Render suporta.
-    nlp = spacy.load("pt_core_news_lg")
-    print("Modelo de NLP carregado com sucesso!")
-except OSError:
-    print("Modelo não encontrado. Tentando baixar 'pt_core_news_lg'...")
-    # Este comando executa o download e instalação do modelo.
-    from spacy.cli import download
-    download("pt_core_news_lg")
-    nlp = spacy.load("pt_core_news_lg")
-    print("Modelo baixado e carregado com sucesso!")
-
-# Listas de palavras-chave e exclusão para a validação de endereços
-PALAVRAS_CHAVE_ENDERECO = [
-    'rua', 'av', 'av.', 'avenida', 'praça', 'travessa', 'tv', 'alameda', 
-    'rodovia', 'rod', 'rodov', 'km', 'cep', 'bairro', 'nº', 'numero', 
-    'apto', 'apartamento', 'bloco', 'andar', 's/n', 'sn', 'sala', 
-    'conjunto', 'cj', 'edificio', 'edif', 'ed.'
-]
-PALAVRAS_DE_EXCLUSAO = [
-    'centavo', 'centavos', 'real', 'reais', 'valor', 'total', 'pagamento',
-    'saldo', 'taxa', 'juros', 'desconto', 'processo'
-]
+nlp = carregar_modelo_nlp()
 
 
-# --- 3. FUNÇÕES DE LÓGICA DE ANONIMIZAÇÃO ---
-# (Exatamente as funções que desenvolvemos e refinamos)
+# --- NOSSAS FUNÇÕES DE ANONIMIZAÇÃO (COPIADAS DO SCRIPT ANTERIOR) ---
+# (Nenhuma alteração necessária aqui)
+PALAVRAS_CHAVE_ENDERECO = ['rua','av','av.','avenida','praça','travessa','tv','alameda','rodovia','rod','rodov','km','cep','bairro','nº','numero','apto','apartamento','bloco','andar','s/n','sn','sala','conjunto','cj','edificio','edif','ed.']
+PALAVRAS_DE_EXCLUSAO = ['centavo','centavos','real','reais','valor','total','pagamento','saldo','taxa','juros','desconto','processo']
 
 def encontrar_dados_sensiveis_regex(texto):
-    """Usa Regex para dados com formato fixo."""
     padroes = {
-        'CPF': r'\b\d{3}\.\d{3}\.\d{3}-\d{2}\b',
-        'CNPJ': r'\b\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}\b',
-        'CPF_NUMEROS': r'\b(?<!\d)\d{11}(?!\d)\b',
-        'CNPJ_NUMEROS': r'\b(?<!\d)\d{14}(?!\d)\b',
+        'CPF': r'\b\d{3}\.\d{3}\.\d{3}-\d{2}\b', 'CNPJ': r'\b\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}\b',
+        'CPF_NUMEROS': r'\b(?<!\d)\d{11}(?!\d)\b', 'CNPJ_NUMEROS': r'\b(?<!\d)\d{14}(?!\d)\b',
         'EMAIL': r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',
-        'TELEFONE': r'\b(?:\(?\d{2}\)?\s?)?(?:9\d{4}|\d{4})[ -]?\d{4}\b',
-        'CEP': r'\b\d{5}[-\s]?\d{3}\b',
+        'TELEFONE': r'\b(?:\(?\d{2}\)?\s?)?(?:9\d{4}|\d{4})[ -]?\d{4}\b', 'CEP': r'\b\d{5}[-\s]?\d{3}\b'
     }
     resultados = []
-    for tipo_entidade, padrao in padroes.items():
+    for tipo, padrao in padroes.items():
         for match in re.finditer(padrao, texto, re.IGNORECASE):
-            resultado = type('obj', (object,), {
-                'start': match.start(), 'end': match.end(), 'entity_type': tipo_entidade
-            })
-            resultados.append(resultado)
+            resultados.append(type('obj', (object,), {'start': match.start(), 'end': match.end(), 'entity_type': tipo}))
     return resultados
 
 def eh_endereco_valido(texto_entidade):
-    """Verifica se um texto se parece com um endereço real usando heurísticas."""
     texto_lower = texto_entidade.lower()
-    if any(exclusao in texto_lower for exclusao in PALAVRAS_DE_EXCLUSAO):
-        return False
-    if any(palavra in texto_lower for palavra in PALAVRAS_CHAVE_ENDERECO):
-        return True
-    if any(char.isdigit() for char in texto_lower):
-        return True
+    if any(exclusao in texto_lower for exclusao in PALAVRAS_DE_EXCLUSAO): return False
+    if any(palavra in texto_lower for palavra in PALAVRAS_CHAVE_ENDERECO): return True
+    if any(char.isdigit() for char in texto_lower): return True
     return False
 
 def encontrar_entidades_nlp(texto):
-    """Usa spaCy para encontrar entidades e depois filtra com base nas heurísticas."""
     doc = nlp(texto)
     resultados = []
     for entidade in doc.ents:
         if entidade.label_ == "LOC" and eh_endereco_valido(entidade.text):
-            resultado = type('obj', (object,), {
-                'start': entidade.start_char, 'end': entidade.end_char, 'entity_type': 'ENDERECO_NLP'
-            })
-            resultados.append(resultado)
+            resultados.append(type('obj', (object,), {'start': entidade.start_char, 'end': entidade.end_char, 'entity_type': 'ENDERECO_NLP'}))
     return resultados
 
-def anonimizar_pdf_stream(pdf_stream):
-    """
-    Lê um stream de PDF, anonimiza em memória e retorna os bytes do novo PDF.
-    """
+def anonimizar_pdf_bytes(pdf_bytes):
+    """Função principal que recebe e retorna os bytes de um PDF."""
     try:
-        doc = fitz.open(stream=pdf_stream, filetype="pdf")
-        FATOR_AJUSTE_ALTURA = 0.15 
-
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        FATOR_AJUSTE_ALTURA = 0.15
+        total_entidades = 0
         for page in doc:
             texto_completo = page.get_text("text", sort=True)
-            if not texto_completo:
-                continue
-
+            if not texto_completo: continue
             resultados_regex = encontrar_dados_sensiveis_regex(texto_completo)
             resultados_nlp = encontrar_entidades_nlp(texto_completo)
             resultados_analise = resultados_regex + resultados_nlp
-            
+            total_entidades += len(resultados_analise)
             for res in resultados_analise:
-                texto_sensivel = texto_completo[res.start:res.end]
-                if len(texto_sensivel.strip()) < 8:
-                    continue
-                
-                areas_para_redacao = page.search_for(texto_sensivel, quads=True)
+                if len(res.end - res.start) < 8: continue
+                areas_para_redacao = page.search_for(texto_completo[res.start:res.end], quads=True)
                 for quad in areas_para_redacao:
                     rect = quad.rect
                     ajuste = rect.height * FATOR_AJUSTE_ALTURA
                     rect.y0 += ajuste; rect.y1 -= ajuste
-                    if rect.is_empty or rect.width == 0: continue
-                    page.add_redact_annot(rect, fill=(0, 0, 0))
-            
+                    if not rect.is_empty:
+                        page.add_redact_annot(rect, fill=(0, 0, 0))
             page.apply_redactions()
-
-        output_bytes = doc.save(garbage=4, deflate=True)
-        doc.close()
-        return output_bytes
+        
+        if total_entidades > 0:
+            return doc.save(garbage=4, deflate=True)
+        else:
+            return None # Retorna None se nada foi anonimizado
     except Exception as e:
-        print(f"Erro durante a anonimização: {e}")
+        st.error(f"Ocorreu um erro ao processar o PDF: {e}")
         return None
 
-# --- 4. ENDPOINTS DA API ---
+# --- INTERFACE DA APLICAÇÃO STREAMLIT ---
+uploaded_file = st.file_uploader("Escolha um arquivo PDF", type="pdf")
 
-@app.route('/anonymize', methods=['POST'])
-def handle_anonymize():
-    """Endpoint que recebe o PDF, anonimiza e retorna."""
-    if 'pdf_file' not in request.files:
-        return Response("Erro: Nenhum arquivo PDF enviado na chave 'pdf_file'.", status=400)
-    
-    file = request.files['pdf_file']
-    
-    if file.filename == '' or not file.mimetype == 'application/pdf':
-        return Response("Erro: Arquivo inválido ou não é um PDF.", status=400)
-    
-    pdf_bytes = file.read()
-    pdf_anonimizado_bytes = anonimizar_pdf_stream(pdf_bytes)
+if uploaded_file is not None:
+    # Mostra uma mensagem enquanto processa
+    with st.spinner('Anonimizando seu PDF, por favor aguarde...'):
+        pdf_bytes = uploaded_file.getvalue()
+        resultado_bytes = anonimizar_pdf_bytes(pdf_bytes)
 
-    if pdf_anonimizado_bytes:
-        return send_file(
-            io.BytesIO(pdf_anonimizado_bytes),
-            mimetype='application/pdf',
-            as_attachment=True,
-            download_name='documento-anonimizado.pdf'
+    st.success("Processo de anonimização concluído!")
+
+    if resultado_bytes:
+        st.download_button(
+            label="Clique para baixar o PDF Anonimizado",
+            data=resultado_bytes,
+            file_name=f"anonimizado_{uploaded_file.name}",
+            mime="application/pdf"
         )
-    return Response("Erro interno ao processar o PDF.", status=500)
-
-
-@app.route('/', methods=['GET'])
-def home():
-    """Rota principal para verificar se a API está online."""
-    return "API de Anonimização de PDF com NLP (spaCy) está no ar!"
+    else:
+        st.warning("Nenhum dado sensível foi encontrado no documento para anonimizar.")
+        # Oferece a opção de baixar o arquivo original mesmo que nada tenha sido encontrado
+        st.download_button(
+            label="Baixar o arquivo original",
+            data=pdf_bytes,
+            file_name=uploaded_file.name,
+            mime="application/pdf"
+        )
