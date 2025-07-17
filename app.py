@@ -1,7 +1,5 @@
-# app.py
-
 import streamlit as st
-import fitz  # PyMuPDF
+import fitz  
 import re
 import os
 import spacy
