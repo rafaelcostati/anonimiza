@@ -1,0 +1,5 @@
+Flask
+PyMuPDF
+gunicorn
+spacy==3.7.5  # Fixar a versão do spaCy é uma boa prática
+request
