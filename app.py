@@ -91,8 +91,7 @@ def anonimizar_pdf_bytes(pdf_bytes):
             page.apply_redactions()
         
         if total_entidades_encontradas > 0:
-            # --- AQUI ESTÁ A CORREÇÃO ---
-            # Trocamos doc.save() por doc.tobytes() para salvar em memória
+            
             return doc.tobytes(garbage=4, deflate=True)
         else:
             return None
