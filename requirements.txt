@@ -1,3 +1,4 @@
 streamlit
 PyMuPDF
-spacy==3.6.1
+spacy==3.7.5
+https://github.com/explosion/spacy-models/releases/download/pt_core_news_lg-3.7.0/pt_core_news_lg-3.7.0-py3-none-any.whl

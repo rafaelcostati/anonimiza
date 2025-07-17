@@ -1,3 +1,5 @@
+# app.py
+
 import streamlit as st
 import fitz  # PyMuPDF
 import re
@@ -14,21 +16,15 @@ st.markdown("Faça o upload de um arquivo PDF para anonimizar dados sensíveis c
 @st.cache_resource
 def carregar_modelo_nlp():
     """Baixa e carrega o modelo spaCy, mantendo-o em cache."""
-    # O nome do modelo que queremos
     modelo = "pt_core_news_lg"
-    # A versão do modelo compatível com spacy==3.6.1
-    versao_modelo = "3.6.0"
-    
     try:
         print(f"Tentando carregar o modelo '{modelo}'...")
         nlp = spacy.load(modelo)
         print("Modelo carregado com sucesso!")
     except OSError:
-        print(f"Modelo não encontrado. Baixando '{modelo}' versão {versao_modelo}...")
+        print(f"Modelo '{modelo}' não encontrado localmente. Tentando baixar...")
         from spacy.cli import download
-        # --- AQUI ESTÁ A MUDANÇA ---
-        # Especificamos a versão exata do modelo a ser baixada
-        download(f"{modelo}=={versao_modelo}")
+        download(modelo)
         nlp = spacy.load(modelo)
         print("Modelo baixado e carregado com sucesso!")
     return nlp
@@ -36,8 +32,6 @@ def carregar_modelo_nlp():
 nlp = carregar_modelo_nlp()
 
 
-# --- NOSSAS FUNÇÕES DE ANONIMIZAÇÃO (COPIADAS DO SCRIPT ANTERIOR) ---
-# (Nenhuma alteração necessária aqui)
 PALAVRAS_CHAVE_ENDERECO = ['rua','av','av.','avenida','praça','travessa','tv','alameda','rodovia','rod','rodov','km','cep','bairro','nº','numero','apto','apartamento','bloco','andar','s/n','sn','sala','conjunto','cj','edificio','edif','ed.']
 PALAVRAS_DE_EXCLUSAO = ['centavo','centavos','real','reais','valor','total','pagamento','saldo','taxa','juros','desconto','processo']
 
@@ -85,7 +79,7 @@ def anonimizar_pdf_bytes(pdf_bytes):
             total_entidades_encontradas += len(resultados_analise)
 
             for res in resultados_analise:
-                if len(res.end - res.start) < 8: continue
+                if (res.end - res.start) < 8: continue
                 
                 areas_para_redacao = page.search_for(texto_completo[res.start:res.end], quads=True)
                 for quad in areas_para_redacao:
@@ -96,11 +90,12 @@ def anonimizar_pdf_bytes(pdf_bytes):
                         page.add_redact_annot(rect, fill=(0, 0, 0))
             page.apply_redactions()
         
-        # Só retorna os bytes se algo foi realmente anonimizado
         if total_entidades_encontradas > 0:
-            return doc.save(garbage=4, deflate=True)
+            # --- AQUI ESTÁ A CORREÇÃO ---
+            # Trocamos doc.save() por doc.tobytes() para salvar em memória
+            return doc.tobytes(garbage=4, deflate=True)
         else:
-            return None # Retorna None se nada foi anonimizado
+            return None
     except Exception as e:
         st.error(f"Ocorreu um erro ao processar o PDF: {e}")
         return None
@@ -109,7 +104,6 @@ def anonimizar_pdf_bytes(pdf_bytes):
 uploaded_file = st.file_uploader("Escolha um arquivo PDF", type="pdf")
 
 if uploaded_file is not None:
-    # Mostra uma mensagem enquanto processa
     with st.spinner('Anonimizando seu PDF, por favor aguarde...'):
         pdf_bytes = uploaded_file.getvalue()
         resultado_bytes = anonimizar_pdf_bytes(pdf_bytes)
