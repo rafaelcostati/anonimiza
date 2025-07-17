@@ -11,20 +11,24 @@ st.title("Ferramenta de Anonimização de PDF 📄➡️⬛")
 st.markdown("Faça o upload de um arquivo PDF para anonimizar dados sensíveis como CPF, CNPJ, e-mails, telefones e endereços.")
 
 # --- LÓGICA DE CACHE E CARREGAMENTO DO MODELO NLP ---
-# @st.cache_resource é a forma correta de carregar modelos pesados no Streamlit.
-# Ele garante que o modelo seja carregado apenas uma vez e mantido em memória.
 @st.cache_resource
 def carregar_modelo_nlp():
     """Baixa e carrega o modelo spaCy, mantendo-o em cache."""
+    # O nome do modelo que queremos
     modelo = "pt_core_news_lg"
+    # A versão do modelo compatível com spacy==3.6.1
+    versao_modelo = "3.6.0"
+    
     try:
         print(f"Tentando carregar o modelo '{modelo}'...")
         nlp = spacy.load(modelo)
         print("Modelo carregado com sucesso!")
     except OSError:
-        print(f"Modelo não encontrado. Baixando '{modelo}'...")
+        print(f"Modelo não encontrado. Baixando '{modelo}' versão {versao_modelo}...")
         from spacy.cli import download
-        download(modelo)
+        # --- AQUI ESTÁ A MUDANÇA ---
+        # Especificamos a versão exata do modelo a ser baixada
+        download(f"{modelo}=={versao_modelo}")
         nlp = spacy.load(modelo)
         print("Modelo baixado e carregado com sucesso!")
     return nlp
@@ -70,16 +74,19 @@ def anonimizar_pdf_bytes(pdf_bytes):
     try:
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         FATOR_AJUSTE_ALTURA = 0.15
-        total_entidades = 0
+        total_entidades_encontradas = 0
         for page in doc:
             texto_completo = page.get_text("text", sort=True)
             if not texto_completo: continue
+            
             resultados_regex = encontrar_dados_sensiveis_regex(texto_completo)
             resultados_nlp = encontrar_entidades_nlp(texto_completo)
             resultados_analise = resultados_regex + resultados_nlp
-            total_entidades += len(resultados_analise)
+            total_entidades_encontradas += len(resultados_analise)
+
             for res in resultados_analise:
                 if len(res.end - res.start) < 8: continue
+                
                 areas_para_redacao = page.search_for(texto_completo[res.start:res.end], quads=True)
                 for quad in areas_para_redacao:
                     rect = quad.rect
@@ -89,7 +96,8 @@ def anonimizar_pdf_bytes(pdf_bytes):
                         page.add_redact_annot(rect, fill=(0, 0, 0))
             page.apply_redactions()
         
-        if total_entidades > 0:
+        # Só retorna os bytes se algo foi realmente anonimizado
+        if total_entidades_encontradas > 0:
             return doc.save(garbage=4, deflate=True)
         else:
             return None # Retorna None se nada foi anonimizado
@@ -117,9 +125,8 @@ if uploaded_file is not None:
         )
     else:
         st.warning("Nenhum dado sensível foi encontrado no documento para anonimizar.")
-        # Oferece a opção de baixar o arquivo original mesmo que nada tenha sido encontrado
         st.download_button(
-            label="Baixar o arquivo original",
+            label="Baixar o arquivo original (nada foi alterado)",
             data=pdf_bytes,
             file_name=uploaded_file.name,
             mime="application/pdf"
